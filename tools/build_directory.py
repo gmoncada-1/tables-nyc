@@ -1,6 +1,6 @@
 """Build data/nyc-directory.json from NYC Open Data (DOHMH Restaurant Inspection Results, 43nn-pn8j).
 One row per restaurant (CAMIS) inspected since 2023, compact keys for the app."""
-import json, urllib.request, urllib.parse, datetime
+import json, os, urllib.request, urllib.parse, datetime
 BASE = "https://data.cityofnewyork.us/resource/43nn-pn8j.json"
 since = (datetime.date.today() - datetime.timedelta(days=3*365)).isoformat()
 cols = "camis,dba,boro,building,street,zipcode,cuisine_description,latitude,longitude"
@@ -30,5 +30,6 @@ for c, x in rows.items():
 out.sort(key=lambda r: r[1].lower())
 meta = {"source": "NYC Open Data - DOHMH New York City Restaurant Inspection Results (43nn-pn8j)", "url": "https://data.cityofnewyork.us/Health/DOHMH-New-York-City-Restaurant-Inspection-Results/43nn-pn8j",
         "inspected_since": since, "built": datetime.date.today().isoformat(), "fields": ["camis","name","boro","address","zip","cuisine","lat","lng"], "count": len(out)}
+os.makedirs("data", exist_ok=True)
 json.dump({"meta": meta, "rows": out}, open("data/nyc-directory.json", "w"), ensure_ascii=False, separators=(",", ":"))
 print(meta)
