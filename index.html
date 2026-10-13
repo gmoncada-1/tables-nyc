@@ -154,6 +154,28 @@ form.log .two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .sugg button{display:flex;gap:8px;align-items:center;width:100%;border:0;background:none;padding:7px 10px;text-align:left;font-size:14px}
 .sugg button:hover,.sugg button:focus-visible{background:var(--soft)}
 .sugg .none{padding:8px 10px;font-size:13px;color:var(--muted)}
+.ph{display:block;width:100%;max-height:360px;object-fit:cover;border-radius:12px;margin:6px 0;background:var(--soft)}
+.ttl{font-family:var(--f-display);font-weight:700;font-size:18px;line-height:1.2}
+.kudo.on{background:var(--neon-soft);border-color:var(--neon);color:var(--hard)}
+.photo-pick{display:flex;flex-direction:column;gap:6px}
+.photo-pick label.btn{color:var(--fg);font-size:14px;cursor:pointer}
+.rewards{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:12px}
+.rw-top{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.rw-top div{display:flex;flex-direction:column}
+.rw-top .big{font-family:var(--f-display);font-size:28px;line-height:1;color:var(--awning);font-variant-numeric:tabular-nums}
+.rw-top .big span{font-size:15px;color:var(--muted)}
+.rw-top small{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+.badges{display:flex;flex-wrap:wrap;gap:6px}
+.badge-c{border-radius:999px;padding:4px 10px;font-size:12px;font-weight:600;background:var(--awning);color:var(--awning-ink)}
+.next{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.nx{display:flex;flex-direction:column;gap:4px;min-width:0}
+.nx-h{display:flex;justify-content:space-between;font-size:13px;font-weight:600}
+.nx small{color:var(--muted);font-size:12px}
+.bar{height:6px;border-radius:3px;background:var(--soft);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--neon);border-radius:3px}
+.tn{font-variant-numeric:tabular-nums;color:var(--muted)}
+.board{display:flex;flex-direction:column;gap:4px;font-size:14px;border-top:1px solid var(--line);padding-top:10px}
+.board .br{display:flex;justify-content:space-between}
 @media (max-width:860px){
   .main{grid-template-columns:minmax(0,1fr)}
   .card{position:fixed;inset:0;z-index:30;border-radius:0;max-height:none;padding:calc(env(safe-area-inset-top,0px) + 16px) 16px calc(env(safe-area-inset-bottom,0px) + 24px)}
@@ -261,7 +283,7 @@ async function boot(){
   const use = window.claude && window.claude.use ? window.claude.use.bind(window.claude) : null;
   if(!use && window.TABLES_LOCAL){ db = localDb(); uid = "me"; writable = true; dbState = "on"; LOCAL = true;
     db.collection("marks").onSnapshot(s => { marks.clear(); s.docs.forEach(d => marks.set(d.id, d.data())); maybeJoin(); renderAll(); });
-    db.collection("visits").onSnapshot(s => { visits.length=0; s.docs.forEach(d => visits.push({id:d.id, ...d.data()})); renderAll(); });
+    db.collection("visits").onSnapshot(s => { visits.length=0; s.docs.forEach(d => visits.push({id:d.id, ...d.data()})); renderAll(); checkNewBadges(); });
     renderAll(); return; }
   if(!use){ dbState="off"; renderAll(); return; }
   [db, user] = await Promise.all([use("db"), use("user")]);
@@ -274,7 +296,7 @@ async function boot(){
     if(!s.metadata.fromCache) maybeJoin();
     renderAll();
   }, fail);
-  db.collection("visits").onSnapshot(s => { visits.length=0; s.docs.forEach(d => visits.push({id:d.id, ...d.data()})); renderAll(); }, fail);
+  db.collection("visits").onSnapshot(s => { visits.length=0; s.docs.forEach(d => visits.push({id:d.id, ...d.data()})); renderAll(); checkNewBadges(); }, fail);
   renderAll();
 }
 function maybeJoin(){ if(joinTried || !writable || !uid || marks.has(uid)) return; joinTried=true; editMine(()=>{}); }
@@ -308,7 +330,9 @@ function answerTag(vid, yes){
 }
 async function addVisit(rid, f){
   try{
-    await db.collection("visits").add({r: rid, date: f.date||"", with: f.with||"", tags: f.tags||[], ordered: f.ordered||"", notes: f.notes||"", again: f.again||"", by: uid, at: Date.now()});
+    const doc = {r: rid, date: f.date||"", title: f.title||"", meal: f.meal||"", with: f.with||"", tags: f.tags||[], ordered: f.ordered||"", notes: f.notes||"", again: f.again||"", by: uid, at: Date.now()};
+    if(f.photo) doc.photo = f.photo;
+    await db.collection("visits").add(doc);
     toast(f.tags && f.tags.length ? "Visit logged. Tagged friends will see it in their feed." : "Visit logged");
     return true;
   }catch(e){ writeErr(e); return false; }
@@ -504,6 +528,75 @@ function renderPlan(){
   </div>`;
 }
 
+/* ---------- rewards ----------
+   Badges reward variety and sharing (photos, tips, friends), never sheer volume. */
+function visitsOf(id){ const a = marksOf(id).acc||{}; return visits.filter(v => v.by===id || (taggedIn(v,id) && a[v.id]===1)); }
+function partySize(v){ return 1 + (v.tags||[]).length + (v.with ? v.with.split(/,|&| and /).filter(x=>x.trim()).length : 0); }
+function weekKey(d){ const t=new Date(d); t.setHours(0,0,0,0); t.setDate(t.getDate()-((t.getDay()+6)%7)); return ymd(t); }
+function vDate(v){ return v.date ? parseYmd(v.date) : new Date(v.at||Date.now()); }
+function streakOf(id){
+  const weeks = new Set(visitsOf(id).map(v => weekKey(vDate(v))));
+  let d = new Date(); let n = 0;
+  if(!weeks.has(weekKey(d))) d.setDate(d.getDate()-7);
+  while(weeks.has(weekKey(d))){ n++; d.setDate(d.getDate()-7); }
+  return n;
+}
+const BADGES = [
+  {k:"first", name:"First Bite", how:"Log your first visit", goal:1, val:V=>V.length},
+  {k:"photo", name:"Picture This", how:"Post 5 visits with a photo", goal:5, val:V=>V.filter(v=>v.photo).length},
+  {k:"lunch", name:"Lunch Club", how:"Log 5 lunches", goal:5, val:V=>V.filter(v=>v.meal==="Lunch").length},
+  {k:"table", name:"Full Table", how:"Log a meal with 4+ people", goal:1, val:V=>V.filter(v=>partySize(v)>=4).length},
+  {k:"hood", name:"Neighborhood Hopper", how:"Eat in 6 neighborhoods", goal:6, val:V=>new Set(V.map(v=>byId.get(v.r)?.nb).filter(Boolean)).size},
+  {k:"world", name:"World Tour", how:"Try 6 kinds of cuisine", goal:6, val:V=>new Set(V.map(v=>byId.get(v.r)?.cg).filter(Boolean)).size},
+  {k:"hard", name:"Hard Ticket", how:"Log a very-hard-to-book spot", goal:1, val:V=>V.filter(v=>byId.get(v.r)?.df==="very hard").length},
+  {k:"reg", name:"Regular", how:"Go back to one spot 3 times", goal:3, val:V=>Math.max(0,...Object.values(V.reduce((m,v)=>(m[v.r]=(m[v.r]||0)+1,m),{})))},
+  {k:"critic", name:"Critic", how:"Leave 10 tips in your notes", goal:10, val:V=>V.filter(v=>(v.notes||"").length>=20).length},
+  {k:"roll", name:"On a Roll", how:"Log something 4 weeks in a row", goal:4, val:(V,id)=>streakOf(id)},
+];
+function badgesOf(id){ const V = visitsOf(id); return BADGES.map(b => { const n = Math.min(b.val(V,id), b.goal); return {...b, n, done: n>=b.goal}; }); }
+let lastEarned = null;
+function checkNewBadges(){
+  if(!uid) return;
+  const now = new Set(badgesOf(uid).filter(b=>b.done).map(b=>b.k));
+  if(lastEarned){ const fresh = BADGES.filter(b => now.has(b.k) && !lastEarned.has(b.k)); if(fresh.length) setTimeout(() => toast("Badge unlocked: " + fresh.map(b=>b.name).join(", ")), 1600); }
+  lastEarned = now;
+}
+function kudosOn(v){ return members().filter(m => (marksOf(m).kudos||{})[v.id]); }
+function toggleKudos(vid){ if(!db || !writable) return; editMine(m => { m.kudos = m.kudos||{}; if(m.kudos[vid]) delete m.kudos[vid]; else m.kudos[vid] = Date.now(); }); }
+function monthBoard(){
+  const now = new Date(), mk = now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
+  return members().map(id => ({id, n: new Set(visitsOf(id).filter(v => ymd(vDate(v)).startsWith(mk)).map(v=>v.r)).size, p: visitsOf(id).filter(v => v.photo && ymd(vDate(v)).startsWith(mk)).length}))
+    .filter(x => x.n).sort((a,b) => b.n-a.n || b.p-a.p).slice(0,5);
+}
+function renderRewards(){
+  if(!uid) return "";
+  const bs = badgesOf(uid), done = bs.filter(b=>b.done), next = bs.filter(b=>!b.done).sort((a,b)=>b.n/b.goal-a.n/a.goal).slice(0,3);
+  const st = streakOf(uid), board = monthBoard();
+  return `<section class="rewards">
+    <div class="rw-top"><div><b class="big">${st}</b><small>week streak</small></div><div><b class="big">${visitsOf(uid).length}</b><small>visits logged</small></div><div><b class="big">${done.length}<span>/${BADGES.length}</span></b><small>badges</small></div></div>
+    ${done.length?`<div class="badges">${done.map(b=>`<span class="badge-c on" title="${esc(b.how)}">${esc(b.name)}</span>`).join("")}</div>`:""}
+    <div class="next">${next.map(b=>`<div class="nx"><div class="nx-h"><span>${esc(b.name)}</span><span class="tn">${b.n}/${b.goal}</span></div><div class="bar"><i style="width:${Math.round(b.n/b.goal*100)}%"></i></div><small>${esc(b.how)}</small></div>`).join("")}</div>
+    ${board.length>1?`<div class="board"><b>This month</b>${board.map((x,i)=>`<div class="br"><span>${i+1}. ${esc(nm(x.id))}</span><span class="tn">${x.n} spot${x.n>1?"s":""}${x.p?` · ${x.p} photo${x.p>1?"s":""}`:""}</span></div>`).join("")}</div>`:""}
+  </section>`;
+}
+function photoHtml(v){ return v.photo && /^data:image\/(jpeg|png|webp);base64,/.test(v.photo) ? `<img class="ph" src="${v.photo}" alt="Photo from ${esc(nm(v.by))}'s visit" loading="lazy">` : ""; }
+async function compressPhoto(file){
+  const url = URL.createObjectURL(file);
+  try{
+    const img = await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=url; });
+    let max = 1100, q = 0.72, out = "";
+    for(let k=0;k<7;k++){
+      const sc = Math.min(1, max/Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement("canvas"); c.width = Math.max(1,Math.round(img.naturalWidth*sc)); c.height = Math.max(1,Math.round(img.naturalHeight*sc));
+      c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+      out = c.toDataURL("image/jpeg", q);
+      if(out.length < 170000) break;
+      max *= 0.8; q = Math.max(0.5, q-0.05);
+    }
+    return out;
+  } finally { URL.revokeObjectURL(url); }
+}
+
 /* feed */
 function renderFeed(){
   if(dbState!=="on") return `<div class="list"><div class="empty">The feed shows up when this page is open in Claude.</div></div>`;
@@ -511,16 +604,20 @@ function renderFeed(){
   const p = pending();
   const items = visits.filter(v => S.feed==="all" || v.by!==uid).sort((a,b)=>(b.at||0)-(a.at||0)).slice(0,150);
   return `<div class="feed">
+    ${renderRewards()}
     <div class="people">${ppl.map(id => `<span class="person">${av(id)}${esc(nm(id))} <small>${beenSets.get(id)?.size||0} been</small></span>`).join("") || '<span class="foot">No one else has opened the list yet.</span>'}</div>
     <div class="seg" aria-label="Feed filter"><button type="button" data-feed="all" class="${S.feed==="all"?"on":""}">Everyone</button><button type="button" data-feed="friends" class="${S.feed==="friends"?"on":""}">Friends only</button></div>
     ${p.length?`<div class="foot"><b>${p.length} tag${p.length>1?"s":""} waiting for you.</b> Accept to add the visit to your log.</div>`:""}
     ${items.map(v => { const r = byId.get(v.r); if(!r) return ""; const mineTag = taggedIn(v,uid) ? tagStatus(v,uid) : null;
       return `<article class="post">${av(v.by)}<div class="body">
         <div class="hd"><b>${esc(nm(v.by))}</b> ${v.by===uid?"logged":"went to"} <button type="button" data-open="${r.id}">${esc(r.name)}</button></div>
-        <div class="when">${esc([r.nb, v.date?fmtD(parseYmd(v.date)):"", ago(v.at||Date.now())].filter(Boolean).join(" · "))}</div>
+        <div class="when">${esc([v.meal, r.nb, v.date?fmtD(parseYmd(v.date)):"", ago(v.at||Date.now())].filter(Boolean).join(" · "))}</div>
+        ${v.title?`<div class="ttl">${esc(v.title)}</div>`:""}
+        ${photoHtml(v)}
         ${withLine(v)}
         ${v.ordered?`<div>Ordered: ${esc(v.ordered)}</div>`:""}${v.notes?`<div>${esc(v.notes)}</div>`:""}${v.again?`<div class="foot">Go back? ${esc(v.again)}</div>`:""}
         <div class="acts">
+          ${(()=>{ const k = kudosOn(v), mine = k.includes(uid); return `<button type="button" class="btn small kudo ${mine?"on":""}" data-kudo="${v.id}" ${writable?"":"disabled"} aria-pressed="${mine}">${mine?"♥":"♡"} Kudos${k.length?` · ${k.length}`:""}</button>`; })()}
           ${mineTag==="wait"&&writable?`<button type="button" class="btn small primary" data-acc="${v.id}">Accept tag</button><button type="button" class="btn small" data-dec="${v.id}">Decline</button>`:""}
           ${mineTag==="ok"?'<span class="tagp ok">In your log ✓</span>':""}
           ${v.by!==uid && !isBeen(r) && writable?`<button type="button" class="btn small" data-star="${r.id}">${isStar(r.id)?"★ Starred":"☆ Want to go"}</button>`:""}
@@ -530,7 +627,7 @@ function renderFeed(){
 
 /* detail card + log form with tagging */
 let draft = null;
-function draftFor(rid){ if(!draft || draft.rid!==rid) draft = {rid, date: ymd(new Date()), with:"", ordered:"", notes:"", again:"", tags:[]}; return draft; }
+function draftFor(rid){ if(!draft || draft.rid!==rid) draft = {rid, date: ymd(new Date()), title:"", meal:"", photo:"", with:"", ordered:"", notes:"", again:"", tags:[]}; return draft; }
 function renderCard(){
   const c = document.getElementById("card");
   const r = byId.get(S.sel);
@@ -576,14 +673,24 @@ function renderCard(){
     ${r.ad?`<div class="sec"><h3>Address</h3><p class="addr">${esc(r.ad)}</p>${r.ap?'<p class="foot">Map location approximate.</p>':""}${!r.lat?'<p class="foot">Not on the map yet.</p>':""}</div>`:`<div class="sec"><h3>Couldn't identify</h3><p class="foot">No NYC restaurant matched “${esc(r.typed)}”. Tell Claude which place you mean.</p></div>`}
     <div class="sec"><h3>Visits (${vs.length})</h3>
       <div class="visits">${vs.map(v => `<div class="visit"><div class="when">${esc(nm(v.by))} · ${esc(v.date? fmtD(parseYmd(v.date)) + ", " + v.date.slice(0,4) : "date not set")}</div>
+        ${v.title?`<div class="ttl">${esc(v.title)}</div>`:""}${photoHtml(v)}
         ${withLine(v)}${v.ordered?`<div>Ordered: ${esc(v.ordered)}</div>`:""}${v.notes?`<div>${esc(v.notes)}</div>`:""}${v.again?`<div class="foot">Go back? ${esc(v.again)}</div>`:""}
         ${taggedIn(v,uid)&&tagStatus(v,uid)==="wait"&&canW?`<div class="kv" style="margin-top:4px"><button type="button" class="btn small primary" data-acc="${v.id}">Accept tag</button><button type="button" class="btn small" data-dec="${v.id}">Decline</button></div>`:""}
         ${canW && v.by===uid?`<button type="button" class="btn small" data-delv="${v.id}" style="margin-top:4px">Remove</button>`:""}</div>`).join("") || '<p class="foot">No visits logged yet.</p>'}</div>
     </div>
     ${canW?`<form class="log" id="logf">
-      <b style="font-size:14px">Log a visit</b>
-      <div class="two"><label>Date<input type="date" id="lv-date" value="${esc(d.date)}"></label>
-      <label>Go back?<select id="lv-again"><option value="">—</option>${["Yes","Maybe","No"].map(o=>`<option ${d.again===o?"selected":""}>${o}</option>`).join("")}</select></label></div>
+      <b style="font-size:14px">Post a visit</b>
+      <div class="photo-pick">
+        <div id="phPrev">${d.photo?`<img class="ph" src="${d.photo}" alt="Selected photo">`:""}</div>
+        <label class="btn" for="lv-photo">${d.photo?"Change photo":"Add a photo of the table"}</label>
+        <input type="file" id="lv-photo" accept="image/*" hidden>
+        ${d.photo?'<button type="button" class="btn small" data-unphoto>Remove photo</button>':""}
+      </div>
+      <label>Title<input id="lv-title" value="${esc(d.title)}" placeholder="e.g. Ana's birthday lunch"></label>
+      <div class="two"><label>Meal<select id="lv-meal"><option value="">—</option>${["Breakfast","Brunch","Lunch","Dinner","Drinks"].map(o=>`<option ${d.meal===o?"selected":""}>${o}</option>`).join("")}</select></label>
+      <label>Date<input type="date" id="lv-date" value="${esc(d.date)}"></label>
+      </div>
+      <div class="two"><label>Go back?<select id="lv-again"><option value="">—</option>${["Yes","Maybe","No"].map(o=>`<option ${d.again===o?"selected":""}>${o}</option>`).join("")}</select></label><span></span></div>
       ${LOCAL?"":`<label>Tag friends on the app
         <div class="tagbox"><input id="lv-tag" autocomplete="off" placeholder="Type a name"><div class="sugg" id="sugg" hidden></div></div>
       </label>
@@ -591,7 +698,7 @@ function renderCard(){
       <label>Others who came (not on the app)<input id="lv-with" value="${esc(d.with)}" placeholder="e.g. Mom, Diego"></label>
       <label>What you ordered<input id="lv-ord" value="${esc(d.ordered)}" placeholder="Dishes worth repeating"></label>
       <label>Notes and tips<textarea id="lv-notes" rows="2" placeholder="Best seat, when to go, what to skip">${esc(d.notes)}</textarea></label>
-      <button class="btn primary" type="submit">Save visit</button>
+      <button class="btn primary" type="submit">Post visit</button>
       ${LOCAL?"":`<p class="foot" style="margin:0">Tagged friends get an Accept button. Once they accept, the visit counts on their side too.</p>`}
     </form>`:""}
     ${r.src && r.src.length?`<div class="sec"><h3>Sources</h3><div class="src">${r.src.map(s=>safeUrl(s)?`<a href="${esc(s)}" target="_blank" rel="noopener">${esc(s.replace(/^https?:\/\/(www\.)?/,"").slice(0,70))}</a>`:"").join("")}</div></div>`:""}
@@ -603,14 +710,16 @@ function renderCard(){
   const f = document.getElementById("logf");
   if(f){
     const bind = (id, key) => { const el=document.getElementById(id); el.addEventListener("input", () => d[key]=el.value); el.addEventListener("change", () => d[key]=el.value); };
-    bind("lv-date","date"); bind("lv-again","again"); bind("lv-with","with"); bind("lv-ord","ordered"); bind("lv-notes","notes");
+    bind("lv-date","date"); bind("lv-again","again"); bind("lv-title","title"); bind("lv-meal","meal");
+    const pi = document.getElementById("lv-photo");
+    pi.onchange = async () => { const fl = pi.files && pi.files[0]; if(!fl) return; try{ d.photo = await compressPhoto(fl); }catch(e){ toast("Couldn't read that photo. Try a JPG or PNG."); return; } draft=d; c.dataset.rid=""; renderCard(); }; bind("lv-with","with"); bind("lv-ord","ordered"); bind("lv-notes","notes");
     drawChips();
     const ti = document.getElementById("lv-tag");
     if(ti) ti.addEventListener("input", () => suggest(ti.value));
     if(ti) ti.addEventListener("focus", () => suggest(ti.value));
     if(ti) ti.addEventListener("keydown", e => { if(e.key==="Escape") document.getElementById("sugg").hidden=true; });
     f.onsubmit = async e => { e.preventDefault(); const btn=f.querySelector("button[type=submit]"); btn.disabled=true;
-      const ok = await addVisit(r.id, {date:d.date, with:d.with.trim(), ordered:d.ordered.trim(), notes:d.notes.trim(), again:d.again, tags:d.tags.slice()});
+      const ok = await addVisit(r.id, {date:d.date, title:d.title.trim(), meal:d.meal, photo:d.photo, with:d.with.trim(), ordered:d.ordered.trim(), notes:d.notes.trim(), again:d.again, tags:d.tags.slice()});
       btn.disabled=false; if(ok){ draft=null; document.activeElement && document.activeElement.blur && document.activeElement.blur(); renderCard(); } };
   }
 }
@@ -661,9 +770,11 @@ function openSpot(id){ S.sel=id; renderAll(); if(window.matchMedia("(max-width:8
 /* ---------- events ---------- */
 document.addEventListener("click", e => {
   if(!e.target.closest(".tagbox")){ const s=document.getElementById("sugg"); if(s) s.hidden=true; }
-  const t = e.target.closest("[data-tick],[data-open],[data-star],[data-delv],[data-close],[data-view],[data-st],[data-acc],[data-dec],[data-feed],[data-addtag],[data-untag]");
+  const t = e.target.closest("[data-tick],[data-open],[data-star],[data-delv],[data-close],[data-view],[data-st],[data-acc],[data-dec],[data-feed],[data-addtag],[data-untag],[data-kudo],[data-unphoto]");
   if(!t) return;
   if(t.dataset.tick){ toggleBeen(t.dataset.tick); return; }
+  if(t.dataset.kudo){ toggleKudos(t.dataset.kudo); return; }
+  if(t.hasAttribute("data-unphoto")){ if(draft){ draft.photo=""; document.getElementById("card").dataset.rid=""; renderCard(); } return; }
   if(t.dataset.star){ toggleStar(t.dataset.star); return; }
   if(t.dataset.delv){ delVisit(t.dataset.delv); return; }
   if(t.dataset.acc){ answerTag(t.dataset.acc, true); return; }
